@@ -709,6 +709,11 @@ class ModelConfig(BaseConfig):
 
     pad_tokenizer: bool = True
 
+    prompt_tuning_num: int = 0
+    """
+    Number of learnable embeddings to prepend to user prompt.
+    """
+
     moe_num_experts: Optional[int] = 8
     """
     The number of experts to use in the MoE block.
@@ -1699,6 +1704,11 @@ class TrainConfig(BaseConfig):
     fsdp: FSDPConfig = field(default_factory=FSDPConfig)
     """
     Fully sharded data parallel settings.
+    """
+
+    counting_loss: bool = False
+    """
+    Masks predicted and target logits for point_count training with only count supervision.
     """
 
     softmax_auxiliary_loss: bool = False

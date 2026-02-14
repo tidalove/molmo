@@ -154,7 +154,7 @@ class LRMonitor:
 
 
 def cross_entropy_loss(
-    logits, labels, ignore_index: int = -100, reduction: str = "mean", compute_z_loss: bool = False, z_loss_scale: float = 1e-4,
+    logits, labels, ignore_index: int = -100, reduction: str = "mean", compute_z_loss: bool = False, z_loss_scale: float = 1e-4, logit_idx=None, model=None
 ):
     loss = F.cross_entropy(logits, labels, ignore_index=ignore_index, reduction=reduction)
 
@@ -171,6 +171,42 @@ def cross_entropy_loss(
 
     return loss, z_loss
 
+
+def masked_cross_entropy_loss(
+    logits, labels, logit_idx, ignore_index: int = -100, reduction: str = "mean", compute_z_loss: bool = False, z_loss_scale: float = 1e-4, model=None
+):
+    # select only the logit(s) that correspond to the count
+    count_logits = logits[logit_idx]
+    count_labels = labels[logit_idx]
+
+    """
+    tokenizer = model.config.get_tokenizer()
+    print("kaidebug tokenizer.decode(logits)")
+    print(tokenizer.decode(torch.argmax(logits, dim=-1)))
+    print("kaidebug tokenizer.decode(labels)")
+    print(tokenizer.decode(labels[labels != -100]))
+    print("kaidebug tokenizer.decode(count_logits)")
+    print(tokenizer.decode(torch.argmax(count_logits, dim=-1)))
+    print("kaidebug tokenizer.decode(count_labels)")
+    print(tokenizer.decode(count_labels))
+    """
+
+    loss = F.cross_entropy(count_logits, count_labels, ignore_index=ignore_index, reduction=reduction)
+    len_tokens = len(labels[labels != ignore_index])
+    loss = loss * len_tokens # renormalize loss based on expected sequence length
+
+    if not compute_z_loss:
+        return loss, None
+
+    z_squared = count_logits.logsumexp(-1).pow(2)
+    if reduction == "mean":
+        z_squared = (z_squared * (count_labels != ignore_index)).mean()
+    elif reduction == "sum":
+        z_squared = (z_squared * (count_labels != ignore_index)).sum()
+
+    z_loss = z_loss_scale * z_squared
+
+    return loss, z_loss
 
 @dataclass
 class DatasetMetrics:
@@ -237,6 +273,9 @@ class Trainer:
     _node_group_ranks: Any = None
 
     def __post_init__(self):
+        if self.cfg.counting_loss:
+            self.loss_fn = masked_cross_entropy_loss
+
         if self.cfg.fused_loss:
             import flash_attn
             from flash_attn.ops.triton.cross_entropy import (  # type: ignore
@@ -247,23 +286,37 @@ class Trainer:
             ce_loss_use_ignore_index_param = version.parse(flash_attn.__version__) >= version.parse("2.5.8")
 
             def fused_loss_fn(
-                logits, labels, ignore_index: int = -100, reduction: str = "mean", compute_z_loss: bool = False
+                logits, labels, ignore_index: int = -100, reduction: str = "mean", compute_z_loss: bool = False, logit_idx = None, model=self.model
             ):
                 if ce_loss_use_ignore_index_param:
                     ignore_index_kwarg = {"ignore_index": ignore_index}
                 else:
                     ignore_index_kwarg = {"ignored_index": ignore_index}
 
-                loss, z_loss = cross_entropy_loss(
-                    logits,
-                    labels,
-                    label_smoothing=0.0,
-                    logit_scale=1.0,
-                    lse_square_scale=self.cfg.softmax_auxiliary_loss_scale if self.cfg.softmax_auxiliary_loss else 0.0,
-                    inplace_backward=False,
-                    process_group=None,
-                    **ignore_index_kwarg,
-                )
+                if logit_idx is None:
+                    loss, z_loss = cross_entropy_loss(
+                        logits,
+                        labels,
+                        label_smoothing=0.0,
+                        logit_scale=1.0,
+                        lse_square_scale=self.cfg.softmax_auxiliary_loss_scale if self.cfg.softmax_auxiliary_loss else 0.0,
+                        inplace_backward=False,
+                        process_group=None,
+                        **ignore_index_kwarg,
+                    )
+                else:
+                    loss, z_loss = masked_cross_entropy_loss(
+                        logits,
+                        labels,
+                        logit_idx,
+                        label_smoothing=0.0,
+                        logit_scale=1.0,
+                        lse_square_scale=self.cfg.softmax_auxiliary_loss_scale if self.cfg.softmax_auxiliary_loss else 0.0,
+                        inplace_backward=False,
+                        process_group=None,
+                        model=model
+                        **ignore_index_kwarg,
+                    )
 
                 mask = labels != ignore_index
 
@@ -774,6 +827,18 @@ class Trainer:
             assert loss_reduction == "none"
             loss_masks = batch["loss_masks"] * (batch["loss_masks"] > 0)
             labels = batch["labels"].long()
+
+            if self.cfg.counting_loss:
+                valid_labels = (labels > 0).to(torch.int)
+                per_row_idx = (valid_labels.sum(dim=1) - 3).to(torch.int)
+                valid = (per_row_idx >= 0)
+                logit_masks = torch.zeros_like(valid_labels)
+                logit_masks[valid, per_row_idx[valid]] = 1
+                logit_masks = logit_masks.view(-1)
+                logit_idx = logit_masks.nonzero(as_tuple=True)[0]
+            else:
+                logit_idx = None
+
             labels.masked_fill_(~(loss_masks > 0), -100)
             labels = labels.view(-1)
             logits_for_loss = logits.to(torch.float32).view(-1, logits.size(-1)) # for numerical stability
@@ -788,6 +853,7 @@ class Trainer:
         ce_loss, z_loss = self.loss_fn(
             logits_for_loss, labels, ignore_index=-100, reduction=loss_reduction,
             compute_z_loss=compute_z_loss, z_loss_scale=self.cfg.softmax_auxiliary_loss_scale,
+            logit_idx = logit_idx, model=self.model
         )
         bs = batch["input_ids"].shape[0]
         if loss_reduction == "none":

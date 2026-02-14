@@ -423,8 +423,8 @@ class PixMoAskModelAnything(Dataset):
 
 class PixMoPointsEval(Dataset):
     @classmethod
-    def download(cls, n_procs=1, check_sha=True, cache_only=False):
-        local_name = join(PIXMO_DATASETS, "pixmo-points-eval")
+    def download(cls, n_procs=1, check_sha=True, cache_only=False, local_name="/data/vision/beery/scratch/kai/molmo/data/"):
+        local_name = join(PIXMO_DATASETS, "pixmo-points-eval") if PIXMO_DATASETS is not None else local_name
         if exists(local_name):
             return
         ds = datasets.load_dataset("allenai/pixmo-points-eval", split="test")

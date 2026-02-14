@@ -160,10 +160,12 @@ def main(cfg: TrainConfig) -> None:
         elif cfg.ft_embedding == "lm_head":
             log.info(f"Freezing LLM: wte.embedding")
             freeze_names = ["transformer.wte.embedding", "transformer.wte.weight"]
-        else:
-            assert cfg.ft_embedding == "wte"
+        elif cfg.ft_embedding == "wte":
             log.info(f"Freezing LLM: ln_f, ff_out")
             freeze_names = ["transformer.ln_f", "transformer.ff_out"]
+        elif cfg.ft_embedding == "none":
+            log.info("Freezing LLM: wte, ln_f, ff_out")
+            freeze_names = ["transformer.ln_f", "transformer.ff_out", "transformer.wte.embedding", "transformer.wte.weight"]
         freeze_parameters_by_name(olmo_model, tuple(freeze_names), warn=False)
 
     olmo_model.set_activation_checkpointing(cfg.activation_checkpointing)

@@ -298,6 +298,7 @@ class MultiModalPreprocessor:
     image_patch_size: int = 14
     image_padding_mask: Union[bool, int] = False
     pad_value: float = 0
+    prompt_tuning_num: int = 0
 
     image_patch_token_id: int = dataclasses.field(init=False)
     image_col_token_id: int = dataclasses.field(init=False)
@@ -311,6 +312,7 @@ class MultiModalPreprocessor:
         self.image_col_token_id = special_tokens[tokenizer.DEFAULT_IM_COL_TOKEN]
         self.image_patch_token_id = special_tokens[tokenizer.DEFAULT_IMAGE_PATCH_TOKEN]
         self.image_prompt_token_id = special_tokens[tokenizer.IMAGE_PROMPT]
+        self.prompt_tuning_token_id = special_tokens[tokenizer.PROMPT_TUNING]
 
     def _normalize(self, image):
         if self.normalize == "openai":
@@ -635,6 +637,9 @@ class MultiModalPreprocessor:
             for msg_ix, message in enumerate(messages):
                 has_loss = msg_ix % 2 == 1
                 message_ids = self.tokenizer.encode(message)
+                if self.prompt_tuning_num and not has_loss: # only add to user prompt
+                    delim = 2
+                    message_ids = message_ids[:delim] + self.prompt_tuning_num * [self.prompt_tuning_token_id] + message_ids[delim:]
                 if has_loss:
                     message_ids.append(self.tokenizer.eos_token_id)
                 token_ids += message_ids
@@ -657,6 +662,9 @@ class MultiModalPreprocessor:
                 for msg_ix, message in enumerate(message_set):
                     has_loss = msg_ix % 2 == 1
                     message_ids = self.tokenizer.encode(message)
+                    if self.prompt_tuning_num and not has_loss: # only add to user prompt
+                        delim = 2
+                        message_ids = message_ids[:delim] + self.prompt_tuning_num * [self.prompt_tuning_token_id] + message_ids[delim:]
                     if has_loss:
                         message_ids.append(self.tokenizer.eos_token_id)
                     token_ids += message_ids
