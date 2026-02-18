@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 def main():
     parser = argparse.ArgumentParser(prog="Evaluate a model on downstream tasks")
     parser.add_argument("checkpoint",
-                        help="Checkpoint to evaluate, should contain a config file and unshared model file")
+                        help="Checkpoint to evaluate, should contain a config file and unsharded model file")
     parser.add_argument("tasks", nargs="+", help="Tasks to evaluate")
     parser.add_argument("--high_res", action="store_true",
                         help="User default high rese setting: max crops=36, seq len=4096 and eval_name=36crop")

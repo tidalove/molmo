@@ -933,8 +933,9 @@ class OptimizerConfig(BaseConfig):
     connector_learning_rate: Optional[float] = 1.0e-4
     vit_learning_rate: Optional[float] = 1.0e-4
     llm_learning_rate: Optional[float] = 1.0e-4
+    prompt_learning_rate: Optional[float] = 2.5e-3 # higher since it's from scratch
     """
-    Separate learning_rate values for the connector, vision backbone, and llm transformer.
+    Separate learning_rate values for the connector, vision backbone, llm transformer, and prompt tuning.
     """
 
     connector_weight_decay: Optional[float] = 0.01

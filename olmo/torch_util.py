@@ -178,6 +178,7 @@ def freeze_parameters_by_name(model: torch.nn.Module, freeze_names: Tuple[str], 
             except:
                 if warn:
                     log.warning(f"Could not find module or parameter with name {name}")
+                continue
         if isinstance(module_or_param, torch.nn.Module):
             freeze_module(module_or_param)
         else:

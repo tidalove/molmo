@@ -15,7 +15,8 @@ from olmo.data.model_preprocessor import Preprocessor, MultiModalPreprocessor
 from olmo.data.pixmo_datasets import PixMoPointExplanations as PixMoPointExplanationHF, \
     PixMoDocs, PixMoCount, PixMoPoints, PixMoCapQa, PixMoCap, PixMoPointExplanations, \
     PixMoAskModelAnything, PixMoPointsEval
-from olmo.data.coco_datasets import PanAfPointsEval, PanAfCount, CFCPointsEval
+from olmo.data.coco_datasets import PanAfPointsEval, PanAfOnlyCount, PanAfFilteredCount, \
+      CFCPointsEval, CFCCount
 from olmo.torch_util import get_global_rank, get_world_size
 
 log = logging.getLogger(__name__)
@@ -267,7 +268,10 @@ def get_dataset_by_name(dataset_name, split):
     if dataset_name == "panaf":
         return PanAfPointsEval(split=split)
     if dataset_name == "panaf_count":
-        return PanAfCount(split=split)
+        return PanAfFilteredCount(split=split)
+        # return PanAfOnlyCount(split=split) for debugging
+    if dataset_name == "cfc_count":
+        return CFCCount(split=split)
 
     # Academic datasets
     if dataset_name == "android_control":

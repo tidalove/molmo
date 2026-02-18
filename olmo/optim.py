@@ -166,6 +166,9 @@ class Optimizer(OptimizerBase):
         def is_llm(group_name: str) -> bool:
             return "llm" in group_name
 
+        def is_prompt(group_name: str) -> bool:
+            return "prompt" in group_name
+
         # Now reduce metrics over all ranks.
         total_grad_norm: torch.Tensor
         per_param_avg_metrics: List[torch.Tensor] = []
@@ -212,10 +215,14 @@ class Optimizer(OptimizerBase):
                 llm_mask = torch.tensor(
                     [float(is_llm(n)) for n in per_param_group_names], device=all_norms.device
                 )
+                prompt_mask = torch.tensor(
+                    [float(is_prompt(n)) for n in per_param_group_names], device=all_norms.device
+                )
                 connector_grad_norm = (all_norms * grad_norm_metric_mask * connector_mask).sum() ** 0.5
                 vit_grad_norm = (all_norms * grad_norm_metric_mask * vit_mask).sum() ** 0.5
                 llm_grad_norm = (all_norms * grad_norm_metric_mask * llm_mask).sum() ** 0.5
-            per_param_norm_metrics = (all_norms ** (0.5)).squeeze(0).split(1)
+                prompt_grad_norm = (all_norms * grad_norm_metric_mask * prompt_mask).sum() ** 0.5
+            per_param_norm_metrics = (all_norms ** (0.5)).reshape(-1).split(1)
         else:
             total_grad_norm = (
                 torch.cat(
@@ -258,6 +265,15 @@ class Optimizer(OptimizerBase):
                     )
                     ** 2.0
                 ).sum() ** 0.5
+                prompt_grad_norms = [
+                    m
+                    for m, n, gn in zip(per_param_norm_metrics, per_param_norm_metric_names, per_param_group_names)
+                    if is_grad_norm_metric(n) and is_prompt(gn)
+                ]
+                prompt_grad_norm = (
+                    torch.cat(prompt_grad_norms or [torch.tensor(0.0)])
+                    ** 2.0
+                ).sum() ** 0.5
             per_param_avg_metrics = [x / n for x, n in zip(per_param_sum_metrics, per_param_numel_metrics)]
 
         assert len(per_param_avg_metrics) == len(per_param_avg_metric_names)
@@ -277,6 +293,7 @@ class Optimizer(OptimizerBase):
             all_metrics["connector_grad_norm"] = connector_grad_norm
             all_metrics["vit_grad_norm"] = vit_grad_norm
             all_metrics["llm_grad_norm"] = llm_grad_norm
+            all_metrics["prompt_grad_norm"] = prompt_grad_norm
 
         # Clip gradients.
         num_grads_clipped = 0
@@ -399,6 +416,8 @@ class Optimizer(OptimizerBase):
                 total_grad_norm = all_metrics["vit_grad_norm"]
             elif "llm" in group_name:
                 total_grad_norm = all_metrics["llm_grad_norm"]
+            elif "prompt" in group_name:
+                total_grad_norm = all_metrics["prompt_grad_norm"]
             else:
                 raise ValueError(f"Unknown group name: {group_name}")
         else:
@@ -701,6 +720,8 @@ class MultimodalScheduler(Scheduler):
             return self.vit_scheduler.get_lr(initial_lr, step, max_steps)
         elif group_name.startswith("llm"):
             return self.llm_scheduelr.get_lr(initial_lr, step, max_steps)
+        elif group_name.startswith("prompt"):
+            return self.llm_scheduelr.get_lr(initial_lr, step, max_steps)
         else:
             raise ValueError(f"Unknown group name: {group_name}")
 
@@ -726,12 +747,14 @@ def get_multimodal_param_groups(cfg: TrainConfig, model: nn.Module) -> List[Dict
     vit_no_decay = set()
     llm_decay = set()
     llm_no_decay = set()
+    prompt_no_decay = set()
 
     all_params = {}
 
     connector_params = list(Molmo.get_connector_parameters())
     vit_params = list(Molmo.get_vit_parameters())
     llm_params = list(Molmo.get_llm_parameters())
+    prompt_params = list(Molmo.get_prompt_parameters())
     wd_exclusions = list(Molmo.get_weight_decay_exclusions())
     for mn, m in model.named_modules():
         for pn, p in m.named_parameters():
@@ -747,9 +770,10 @@ def get_multimodal_param_groups(cfg: TrainConfig, model: nn.Module) -> List[Dict
             is_connector = listinstr(connector_params, fpn, delimiter='.')
             is_vit = listinstr(vit_params, fpn, delimiter='.')
             is_llm = listinstr(llm_params, fpn, delimiter='.')
+            is_prompt = listinstr(prompt_params, fpn, delimiter='.')
             no_apply_decay = listinstr(wd_exclusions, fpn, delimiter='.')
 
-            assert is_connector or is_vit or is_llm, f"Parameter {fpn} does not belong to any group!"
+            assert is_connector or is_vit or is_llm or is_prompt, f"Parameter {fpn} does not belong to any group!"
 
             if is_connector and not no_apply_decay:
                 connector_decay.add(fpn)
@@ -763,6 +787,8 @@ def get_multimodal_param_groups(cfg: TrainConfig, model: nn.Module) -> List[Dict
                 llm_decay.add(fpn)
             elif is_llm and no_apply_decay:
                 llm_no_decay.add(fpn)
+            elif is_prompt and no_apply_decay:
+                prompt_no_decay.add(fpn)
             else:
                 raise ValueError(f"Parameter {fpn} does not belong to any group!")
 
@@ -782,7 +808,7 @@ def get_multimodal_param_groups(cfg: TrainConfig, model: nn.Module) -> List[Dict
     vit_llm_inter_params = vit_llm_inter_params | (vit_no_decay & llm_decay) | (vit_no_decay & llm_no_decay)
     inter_params = connector_inter_params | vit_inter_params | llm_inter_params
     inter_params = inter_params | connector_vit_inter_params | connector_llm_inter_params | vit_llm_inter_params
-    union_params = connector_decay | connector_no_decay | vit_decay | vit_no_decay | llm_decay | llm_no_decay
+    union_params = connector_decay | connector_no_decay | vit_decay | vit_no_decay | llm_decay | llm_no_decay | prompt_no_decay
     assert len(inter_params) == 0, f"parameters {inter_params} made it into both decay/no_decay sets!"
     assert (
         len(all_params.keys() - union_params) == 0
@@ -871,6 +897,19 @@ def get_multimodal_param_groups(cfg: TrainConfig, model: nn.Module) -> List[Dict
                 "betas": cfg.optimizer.llm_betas,
                 "eps": cfg.optimizer.llm_eps,
                 "group_name": "llm_no_decay",
+                **param_group_defaults,
+            }
+        )
+    if len(prompt_no_decay) > 0:
+        param_groups.append(
+            {
+                "params": [all_params[pn] for pn in prompt_no_decay],
+                "param_names": prompt_no_decay,
+                "lr": cfg.optimizer.prompt_learning_rate,
+                "weight_decay": 0.0,
+                "betas": cfg.optimizer.betas,
+                "eps": cfg.optimizer.eps,
+                "group_name": "prompt_no_decay",
                 **param_group_defaults,
             }
         )

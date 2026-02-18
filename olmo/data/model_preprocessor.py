@@ -801,6 +801,8 @@ class MultiModalPreprocessor:
             "loss_masks": all_loss_masks,
             "target_tokens": target_tokens,
         }
+        if self.prompt_tuning_num:
+            out["prompt_idx"] = np.where(tokens == self.prompt_tuning_token_id)[0]
         if image_padding_mask:
             out["image_masks"] = np.concatenate(all_crop_masks, 0)
         if subsegments is not None:

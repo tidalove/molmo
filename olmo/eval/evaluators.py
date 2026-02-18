@@ -270,20 +270,20 @@ def is_valid_format(input_string):
     return match is not None
 
 
-def compute_precision(row_ind: np.ndarray, col_ind: np.ndarray, preds: np.ndarray, masks: List[np.ndarray]):
+def compute_match_count(row_ind: np.ndarray, col_ind: np.ndarray, preds: np.ndarray, masks: List[np.ndarray]):
     cnt = 0
     for i, j in zip(row_ind, col_ind):
         if is_point_in_region(preds[i], masks[j]):
             cnt += 1
-    return cnt / len(preds)
+    return cnt
+
+
+def compute_precision(row_ind: np.ndarray, col_ind: np.ndarray, preds: np.ndarray, masks: List[np.ndarray]):
+    return compute_match_count(row_ind, col_ind, preds, masks) / len(preds)
 
 
 def compute_recall(row_ind: np.ndarray, col_ind: np.ndarray, preds: np.ndarray, masks: List[np.ndarray]):
-    cnt = 0
-    for i, j in zip(row_ind, col_ind):
-        if is_point_in_region(preds[i], masks[j]):
-            cnt += 1
-    return cnt / len(masks)
+    return compute_match_count(row_ind, col_ind, preds, masks) / len(masks)
 
 
 def f1_score(precision: float, recall: float, epsilon: float = 1e-10):
@@ -427,7 +427,10 @@ class PointingEval(Evaluator):
         scores = defaultdict(list)
         pred_points = []
         gt_points = []
-        for ex_ix, pred_seq in enumerate(new_tokens):
+        micro_tp = []
+        micro_n_pred = []
+        micro_n_gt = []
+        for ex_ix, pred_seq in enumerate(new_tokens): # each ex_ix = 1 image; ie pred should contain all predicted points per image
             metadata = metadatas[ex_ix]
             pred = vocab.decode(pred_seq[pred_seq >= 0]).strip()
             answer_points = metadata["points"]
@@ -438,25 +441,63 @@ class PointingEval(Evaluator):
             if len(answer_points) == 0:
                 precision = recall = f1 = float(abs_preds is None or len(abs_preds) == 0)
                 abs_gts = None
+                n_tp = 0
+                n_pred_pts = 0 if (abs_preds is None or len(abs_preds) == 0) else len(abs_preds)
+                n_gt_pts = 0
             else:
-                abs_gts = answer_points
+                # Convert GT points to absolute pixel coordinates to match abs_preds
+                point_scale = metadata.get("point_scale", 100)
+                abs_gts = np.array(answer_points) / point_scale * np.array([[image_w, image_h]])
+                n_gt_pts = len(masks)
                 if not is_valid_format(pred):
                     precision = recall = f1 = 0.0
+                    n_tp = 0
+                    n_pred_pts = 0
                 else:
                     abs_preds = np.array(abs_preds)
+                    n_pred_pts = len(abs_preds)
                     dists = cdist(abs_preds, abs_gts)
                     row_ind, col_ind = linear_sum_assignment(dists)
-                    precision = compute_precision(row_ind, col_ind, abs_preds, masks)
-                    recall = compute_recall(row_ind, col_ind, abs_preds, masks)
+                    n_tp = compute_match_count(row_ind, col_ind, abs_preds, masks)
+                    precision = n_tp / len(abs_preds)
+                    recall = n_tp / len(masks)
                     f1 = f1_score(precision, recall)
             scores["precision"].append(precision)
             scores["recall"].append(recall)
             scores["f1"].append(f1)
+            micro_tp.append(n_tp)
+            micro_n_pred.append(n_pred_pts)
+            micro_n_gt.append(n_gt_pts)
 
             pred_points.append(abs_preds)
             gt_points.append(abs_gts)
 
         out = {}
+
+        # Helper to compute micro-averaged metrics from counts arrays
+        def _add_micro_metrics(out, tp_arr, pred_arr, gt_arr, suffix=""):
+            total_tp = sum(tp_arr)
+            total_pred = sum(pred_arr)
+            total_gt = sum(gt_arr)
+
+            mp = total_tp / total_pred if total_pred > 0 else 0.0
+            mr = total_tp / total_gt if total_gt > 0 else 0.0
+            mf1 = f1_score(mp, mr)
+
+            mp_metric = MeanMetric(nan_strategy="error")
+            mp_metric.update(mp, max(total_pred, 1))
+            mr_metric = MeanMetric(nan_strategy="error")
+            mr_metric.update(mr, max(total_gt, 1))
+            mf1_metric = MeanMetric(nan_strategy="error")
+            mf1_metric.update(mf1, 1)
+
+            out[f"micro_precision{suffix}"] = mp_metric
+            out[f"micro_recall{suffix}"] = mr_metric
+            out[f"micro_f1{suffix}"] = mf1_metric
+
+        micro_tp = np.array(micro_tp)
+        micro_n_pred = np.array(micro_n_pred)
+        micro_n_gt = np.array(micro_n_gt)
 
         if "was_lowered" in metadatas[0]:
             # Get a score with and without lowering
@@ -466,9 +507,12 @@ class PointingEval(Evaluator):
                 v = np.array(v)
                 out[k] = mean_metric(v[nocase])
                 out[f"{k}_lower"] = mean_metric(v[lowered])
+            _add_micro_metrics(out, micro_tp[nocase], micro_n_pred[nocase], micro_n_gt[nocase])
+            _add_micro_metrics(out, micro_tp[lowered], micro_n_pred[lowered], micro_n_gt[lowered], suffix="_lower")
         else:
             for k, v in scores.items():
                 out[k] = mean_metric(v)
+            _add_micro_metrics(out, micro_tp, micro_n_pred, micro_n_gt)
 
         if self.n_to_log:
             per_example_scores = [{k: scores[k][i] for k in scores} for i in range(len(new_tokens))]

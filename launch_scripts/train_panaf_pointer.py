@@ -100,7 +100,7 @@ if __name__ == "__main__":
     parser.add_argument("--ft_embedding", default="none", type=str)
     parser.add_argument("--duration", type=int, default=1000)
     parser.add_argument("--log_interval", type=int, default=20)
-    parser.add_argument("--prompt_tuning", action="store_true")
+    parser.add_argument("--prompt_tuning", type=int, default=0)
     args, other_args = parser.parse_known_args()
 
     eval_examples = 2048
@@ -127,7 +127,7 @@ if __name__ == "__main__":
     model_cfg.message_formatting = "role"
     model_cfg.system_prompt_kind = "demo_or_style"
     model_cfg.multi_annotation_weighting = "root_subsegments"
-    model_cfg.prompt_tuning_num = 20 if args.prompt_tuning else 0
+    model_cfg.prompt_tuning_num = args.prompt_tuning
 
     evaluations = []
     evaluation = get_evaluation(

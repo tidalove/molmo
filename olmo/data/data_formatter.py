@@ -9,6 +9,43 @@ from typing import Optional, Dict, Tuple
 
 import numpy as np
 
+NO_POINT_PREFIX = [
+    "No pointing: ",
+    "No pointing: ",
+    "no pointing:\n",
+    "No pointing:\n",
+    "Not pointing:\n",
+    "No Points: ",
+    "No Points: ",
+    "NO POINTING\n",
+    "No pontiing\n",
+    "No Points:\n ",
+    "No pointing\n",
+    "Do not point. ",
+    "Refrain from pointing. ",
+    "Avoid generating points . ",
+    "For this question, do not use points. ",
+    "Refrain from using points:\n",
+    "Don't include points in your response. ",
+    "Don't point. ",
+    "Don't use points. ",
+    "Please don't use points.\n\n",
+    "Please don't use points.\n\n",
+    "Respond without using points. ",
+    "Respond without pointing:\n",
+    "Do not generate ponits: ",
+    "Do not point. ",
+    "Do not point\n",
+    "no pointing\n\n",
+    "Answer without points: ",
+    "Answer this question without pointing: ",
+    "Answer without poiints. ",
+    "answer without points: ",
+    "answer with text only, do not points\n"
+]
+"""No-pointing requests templates, used for preprocessing"""
+
+
 GENERAL_PROMPTS_V1 = {
     "short_answer": [
         "Answer this question very briefly\n{question}",
@@ -257,6 +294,7 @@ STYLE_TO_GENERAL_PROMPT = {
     "count_then_point": "count_then_point",
     "only_count": "only_count",
     "plain": "plain",
+    "panaf_qa": "multiple_choice"
 }
 
 
@@ -284,6 +322,11 @@ def apply_keyword_prompt(prompts, example, rng, keywords=None, dbg=False):
     else:
         prompt = prompts[rng.randint(0, len(prompts))]
     return apply_keywords(prompt, example, keywords)
+
+
+def prepend_prompt(prompts, example, rng):
+    prepend = prompts[rng.randint(0, len(prompts))]
+    return prepend + example
 
 
 DEMO_STYLES = [
@@ -332,14 +375,19 @@ class DataFormatter:
         return answer
 
     def format_points(self, example):
-        if "points" not in example:
-            return None
-        points = example["points"]
         style = example["style"]
         if "label" in example:
             label = example["label"].lower()
         else:
             label = example["question"]
+        if "points" not in example:
+            if "point" in style:
+                return None
+            else:
+                count = example["count"]
+                return f"Counting the {label} shows a total of {count}."
+            
+        points = example["points"]
         if len(points) == 0:
             if style in ["pointing", "point_count"]:
                 return "There are none."
@@ -354,7 +402,7 @@ class DataFormatter:
             point_txt = self.points_to_text(points, [w/100, h/100], label, label)
 
         if style == "point_count":
-            return f"Counting the {point_txt} shows a total of {len(points)}."
+            return f"Counting the {point_txt} shows a total of {len(points)}."            
         else:
             return point_txt
 
@@ -466,7 +514,7 @@ class DataFormatter:
             # Bare-bone prompt with no templating or instructions
             if "prompt" in example:
                 prompt = example["prompt"]
-            elif style in ["pointing", "point_count"]:
+            elif style in ["pointing", "point_count", "only_count"]:
                 if "question" in example:
                     prompt = example["question"]
                 else:
@@ -492,7 +540,7 @@ class DataFormatter:
                 # plain text for everything else
                 if style == "long_caption":
                     prompt = apply_keyword_prompt(GENERAL_PROMPTS_V1["long_caption"], example, rng, dbg=self.debug)
-                elif style in ["pointing", "point_count"]:
+                elif style in ["pointing", "point_count", "only_count"]:
                     # output, prompt, metadata = self.format_points(example)
                     if "question" in example:
                         prompt = example["question"]
@@ -502,6 +550,7 @@ class DataFormatter:
                         else:
                             prompt = example["label_cased"]
                         prompt = apply_keyword_prompt(GENERAL_PROMPTS_V1[style], dict(example, label=prompt), rng, dbg=self.debug)
+                        prompt = prepend_prompt(NO_POINT_PREFIX, prompt, rng)
                     output = self.format_points(example)
                 elif "prompt" in example:
                     prompt = example["prompt"]

@@ -21,9 +21,9 @@ pyrightconfig.json
 
 
 # jupyter notebooks
-
+*.ipynb
 .ipynb_checkpoints
-
+notebooks/
 
 # miscellaneous
 
@@ -31,7 +31,7 @@ pyrightconfig.json
 doc/_build/
 *.swp
 .DS_Store
-
+*.sh
 
 # python
 
@@ -56,3 +56,11 @@ site/
 /wandb/
 /scratch/
 core
+logs/
+outputs/
+panaf*/
+predictions*/
+
+# models
+Molmo*/
+data/

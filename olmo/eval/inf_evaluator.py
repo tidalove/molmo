@@ -161,6 +161,7 @@ class InfDatasetEvaluator:
                             images=batch_inference.get("images"),
                             image_masks=batch_inference.get("image_masks"),
                             image_input_idx=batch_inference.get("image_input_idx"),
+                            prompt_idx=batch_inference.get("prompt_idx")
                         )
                         inference_warmup = False
 
@@ -169,6 +170,7 @@ class InfDatasetEvaluator:
                         images=batch_inference.get("images"),
                         image_masks=batch_inference.get("image_masks"),
                         image_input_idx=batch_inference.get("image_input_idx"),
+                        prompt_idx=batch_inference.get("prompt_idx"),
                         max_steps=self.max_new_tokens,
                         is_distributed=is_distributed
                     )

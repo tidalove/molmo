@@ -145,28 +145,32 @@ def main(cfg: TrainConfig) -> None:
 
     # Freeze model components.
     if cfg.model.vision_backbone is not None and not cfg.ft_connector:
-        freeze_parameters_by_name(olmo_model, Molmo.get_connector_parameters(), warn=False)
+        freeze_parameters_by_name(olmo_model, Molmo.get_connector_parameters(), warn=True)
     if cfg.model.vision_backbone is not None and not cfg.ft_vit:
         log.info(f"Freezing vision backbone")
-        freeze_parameters_by_name(olmo_model, Molmo.get_vit_parameters(), warn=False)
+        freeze_parameters_by_name(olmo_model, Molmo.get_vit_parameters(), warn=True)
     if not cfg.ft_llm:
         log.info(f"Freezing LLM")
-        freeze_parameters_by_name(olmo_model, Molmo.get_llm_parameters(), warn=False)
+        freeze_parameters_by_name(olmo_model, Molmo.get_llm_parameters(), warn=True)
     if cfg.ft_embedding != "all":
+        if cfg.ft_llm:
+            freeze_names = ['transformer.wpe', 'transformer.blocks', 'transformer.block_groups']
+        else:
+            freeze_names = []
         if cfg.ft_embedding == "ln_f":
             log.info(f"Freezing LLM: wte.embedding, ff_out")
-            freeze_names = ["transformer.wte.embedding", "transformer.wte.weight"]
+            freeze_names += ["transformer.wte.embedding", "transformer.wte.weight"]
             freeze_names += ["transformer.ff_out"]
         elif cfg.ft_embedding == "lm_head":
             log.info(f"Freezing LLM: wte.embedding")
-            freeze_names = ["transformer.wte.embedding", "transformer.wte.weight"]
+            freeze_names += ["transformer.wte.embedding", "transformer.wte.weight"]
         elif cfg.ft_embedding == "wte":
             log.info(f"Freezing LLM: ln_f, ff_out")
-            freeze_names = ["transformer.ln_f", "transformer.ff_out"]
+            freeze_names += ["transformer.ln_f", "transformer.ff_out"]
         elif cfg.ft_embedding == "none":
             log.info("Freezing LLM: wte, ln_f, ff_out")
-            freeze_names = ["transformer.ln_f", "transformer.ff_out", "transformer.wte.embedding", "transformer.wte.weight"]
-        freeze_parameters_by_name(olmo_model, tuple(freeze_names), warn=False)
+            freeze_names += ["transformer.ln_f", "transformer.ff_out", "transformer.wte.embedding", "transformer.wte.weight"]
+        freeze_parameters_by_name(olmo_model, tuple(freeze_names), warn=True)
 
     olmo_model.set_activation_checkpointing(cfg.activation_checkpointing)
 
@@ -183,10 +187,13 @@ def main(cfg: TrainConfig) -> None:
                 olmo_model.to_empty(device="cpu")
             if cfg.initial_model_checkpoint:
                 state_dict = torch.load(join(cfg.initial_model_checkpoint, "model.pt"), map_location="cpu")
-                olmo_model.load_state_dict(state_dict)
+                missing_keys, unexpected_keys = olmo_model.load_state_dict(state_dict, strict=False)
                 del state_dict
             else:
                 olmo_model.reset_with_pretrained_weights()
+            if 'prompt_embed' in missing_keys:
+                log.info("prompt_embed missing from state dict; initializing weights")
+                olmo_model.reset_prompt_parameters()
     else:
         init_weights = True
 

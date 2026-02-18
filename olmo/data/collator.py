@@ -78,6 +78,10 @@ class MMCollator:
                 out[key] = _collate(
                     [ex.get(key) for ex in batch], self.max_sequence_length, dtype, pad=self.pad)
 
+        if any("prompt_idx" in ex for ex in batch):
+            out["prompt_idx"] = _collate(
+                [ex.get("prompt_idx") for ex in batch], None, np.int64, pad=None)
+
         for key in self.IMAGE_KEYS:
             if any(key in ex for ex in batch):
                 out[key] = _collate([ex.get(key) for ex in batch], self.max_crops, pad=self.pad)

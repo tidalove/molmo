@@ -162,6 +162,19 @@ class Embedding(nn.Module):
         return F.embedding(x, torch.cat([self.embedding, self.new_embedding], dim=0))
 
 
+class PromptEmbedding(nn.Module):
+    def __init__(self, num_prompts: int, d_model: int):
+        super().__init__()
+        self.weight = nn.Parameter(torch.randn(num_prompts, d_model))
+
+    def forward(self, x: torch.Tensor, prompt_idx: torch.Tensor) -> torch.Tensor:
+        batch_size = x.shape[0]
+        batch_idx = torch.arange(batch_size, device=x.device)[:, None].expand_as(prompt_idx)
+        prompt_embed_idx = torch.arange(prompt_idx.size(1), device=x.device)[None, :].expand_as(prompt_idx)
+        x[batch_idx, prompt_idx] += self.weight[prompt_embed_idx]
+        return x
+
+
 class Dropout(nn.Dropout):
     def __init__(
         self,
@@ -1589,6 +1602,7 @@ class Molmo(nn.Module):
         super().__init__()
         self.config = config
         self.__cache = BufferCache()
+        self.tokenizer = self.config.get_tokenizer() # for debug decoding during forward pass
 
         # Validate config.
         if self.config.embedding_size is not None and self.config.embedding_size != self.config.vocab_size:
@@ -1635,6 +1649,11 @@ class Molmo(nn.Module):
                 ln_f=LayerNorm.build(config),
             )
         )
+
+        if self.config.prompt_tuning_num:
+            self.transformer.update({
+                "prompt_embed": PromptEmbedding(config.prompt_tuning_num, config.d_model)
+            })
 
         blocks = [OLMoBlock.build(i, config, self.__cache) for i in range(config.n_layers)]
         if self.config.block_group_size > 1:
@@ -1686,13 +1705,14 @@ class Molmo(nn.Module):
             if "wte.weight" in state_dict and self.config.additional_vocab_size:
                 state_dict["wte.embedding"] = state_dict.pop("wte.weight")
             transformer_keys = set(x[0] for x in self.transformer.named_parameters())
-            assert transformer_keys - set(state_dict.keys()) <= {"wte.new_embedding"}, \
+            assert transformer_keys - set(state_dict.keys()) <= {"wte.new_embedding", "prompt_embed.weight"}, \
                 "Unexpected keys in the model file"
             self.transformer.load_state_dict(state_dict, strict=False)
             if hasattr(self.transformer.wte, "new_embedding"):
                 # This is the only parameter not initialized from the LLM weights
                 nn.init.normal_(self.transformer.wte.new_embedding, std=self.config.new_embedding_init_range)
-
+            if hasattr(self.transformer, "prompt_embed") and "prompt_embed.weight" not in state_dict:
+                nn.init.normal_(self.transformer.prompt_embed.weight, std=self.config.new_embedding_init_range)
         if self.vision_backbone is not None:
             self.vision_backbone.reset_with_pretrained_weights()
 
@@ -1737,6 +1757,13 @@ class Molmo(nn.Module):
                 "transformer.ln_f", "transformer.ff_out",
             ]
         )
+    
+    def get_prompt_parameters():
+        return tuple(
+            [
+                'prompt_embed'
+            ]
+        )
 
     @staticmethod
     def get_weight_decay_exclusions():
@@ -1750,6 +1777,7 @@ class Molmo(nn.Module):
                 "attention_norm", "ffn_norm",
                 "lambda1", "lambda2",
                 "positional_embedding", "class_embedding",
+                "prompt_embed"
             ]
         )
 
@@ -1765,6 +1793,10 @@ class Molmo(nn.Module):
         if self.vision_backbone is not None:
             self.vision_backbone.reset_parameters()
         self.reset_non_vision_parameters()
+
+    def reset_prompt_parameters(self):
+        if hasattr(self.transformer, "prompt_embed"):
+            nn.init.normal_(self.transformer.prompt_embed.weight, std=self.config.new_embedding_init_range)
 
     def reset_non_vision_parameters(self):
         # Top-level embeddings / linear layers.
@@ -1815,6 +1847,7 @@ class Molmo(nn.Module):
         last_logits_only: bool = False,
         output_hidden_states: Optional[bool] = None,
         append_last_valid_logits: Optional[torch.Tensor] = None,
+        prompt_idx: Optional[torch.Tensor] = None,
     ) -> OLMoOutput:
         """
         :param input_ids: A tensor of shape `(batch_size, seq_len)`.
@@ -1890,7 +1923,9 @@ class Molmo(nn.Module):
         if input_ids is not None:
             input_ids = input_ids * (input_ids != -1).to(input_ids.dtype)
         x = self.transformer.wte(input_ids) if input_embeddings is None else input_embeddings  # type: ignore
-
+        # Add prompt tuning embeddings
+        if prompt_idx is not None:
+            x = self.transformer.prompt_embed(x, prompt_idx)
         num_image: Optional[int] = None
         if images is not None:
             # shape: (batch_size, num_image, num_patch, d_model)
@@ -2061,6 +2096,8 @@ class Molmo(nn.Module):
             size_based_module_to_wrap.add(self.transformer.ff_out)
         if hasattr(self.transformer, "ln_f"):
             size_based_module_to_wrap.add(self.transformer.ln_f)
+        if hasattr(self.transformer, "prompt_embed"):
+            size_based_module_to_wrap.add(self.transformer.prompt_embed)
         if self.vision_backbone is not None and self.config.vision_backbone.fsdp_wrap:
             size_based_module_to_wrap.add(self.vision_backbone.image_pooling_2d)
             size_based_module_to_wrap.add(self.vision_backbone.image_projector)
@@ -2201,7 +2238,8 @@ class Molmo(nn.Module):
         min_steps: Optional[int] = None,
         final_sequence_scorer: Optional[FinalSequenceScorer] = None,
         constraints: Optional[List[Constraint]] = None,
-        is_distributed: bool=False
+        is_distributed: bool=False,
+        prompt_idx: Optional[torch.Tensor] = None,
     ) -> OLMoGenerateOutput:
         """
         Generate token IDs using beam search.
@@ -2286,11 +2324,13 @@ class Molmo(nn.Module):
             nonlocal images
             nonlocal image_input_idx
             nonlocal append_last_valid_logits
+            nonlocal prompt_idx
 
             attention_mask = state.get("attention_mask")
             attention_bias = state.get("attention_bias")
 
             if tokens_generated > 0:
+                _prompt_idx = None # no more prompt injection after first pass
                 past_key_values = unflatten_past_key_values(state)
                 input_ids = last_predictions.unsqueeze(1)
                 if not self.config.use_position_ids and attention_mask is not None:
@@ -2318,6 +2358,7 @@ class Molmo(nn.Module):
                 _image_input_idx = image_input_idx
                 _position_ids = position_ids
                 _append_last_valid_logits = append_last_valid_logits
+                _prompt_idx = prompt_idx
 
             tokens_generated += 1
 
@@ -2334,6 +2375,7 @@ class Molmo(nn.Module):
                 use_cache=True,
                 last_logits_only=True,
                 append_last_valid_logits=_append_last_valid_logits,
+                prompt_idx=_prompt_idx
             )
             log_probs = F.log_softmax(output.logits[:, -1, :], dim=-1)
 

@@ -69,13 +69,13 @@ if __name__ == "__main__":
     parser.add_argument("--log_interval", type=int, default=20)
     args, other_args = parser.parse_known_args()
 
-    eval_examples = 2048
+    eval_examples = 120 # 2048
     max_inf_examples = args.max_inf_examples
     log_interval = args.log_interval
     global_batch_size = args.global_batch_size
     duration = args.duration
-    inf_eval_interval = duration // 5
-    eval_interval = duration // 5
+    inf_eval_interval = duration
+    eval_interval = duration
     model_init = args.checkpoint
     if exists(join(args.checkpoint, "model.yaml")):
         model_cfg = ModelConfig.load(join(args.checkpoint, "model.yaml"))
@@ -127,7 +127,7 @@ if __name__ == "__main__":
             dataset="panaf_count",
             for_inference=False,
             shuffle=True,
-            split="train",
+            split="hard",
             drop_last=True,
             sequence_length=args.seq_len,
             num_workers=2,
@@ -188,7 +188,7 @@ if __name__ == "__main__":
         speed_monitor=SpeedMonitorConfig(window_size=20),
         softmax_auxiliary_loss=True,
         softmax_auxiliary_loss_scale=1e-4,
-        counting_loss=True,
+        counting_loss=False,
         activation_checkpointing=ActivationCheckpointingStrategy.whole_layer,
         eval_interval=eval_interval,
         inf_eval_interval=inf_eval_interval,

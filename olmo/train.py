@@ -8,6 +8,7 @@ import os
 import random
 import shutil
 import time
+import pickle
 from collections import deque, defaultdict
 from dataclasses import dataclass, field
 from itertools import islice
@@ -179,17 +180,14 @@ def masked_cross_entropy_loss(
     count_logits = logits[logit_idx]
     count_labels = labels[logit_idx]
 
-    """
     tokenizer = model.config.get_tokenizer()
-    print("kaidebug tokenizer.decode(logits)")
-    print(tokenizer.decode(torch.argmax(logits, dim=-1)))
-    print("kaidebug tokenizer.decode(labels)")
-    print(tokenizer.decode(labels[labels != -100]))
-    print("kaidebug tokenizer.decode(count_logits)")
-    print(tokenizer.decode(torch.argmax(count_logits, dim=-1)))
-    print("kaidebug tokenizer.decode(count_labels)")
-    print(tokenizer.decode(count_labels))
-    """
+    decoded_logits = tokenizer.decode(torch.argmax(logits, dim=-1)[labels != -100])
+    decoded_labels = tokenizer.decode(labels[labels != -100])
+    print(f"kaidebug full logits vs labels:{decoded_logits}\n{decoded_labels}")
+
+    decoded_logits = tokenizer.decode(torch.argmax(count_logits, dim=-1))
+    decoded_labels = tokenizer.decode(count_labels)
+    print(f"kaidebug count logits vs labels: {decoded_logits} vs {decoded_labels}")
 
     loss = F.cross_entropy(count_logits, count_labels, ignore_index=ignore_index, reduction=reduction)
     len_tokens = len(labels[labels != ignore_index])
@@ -512,11 +510,13 @@ class Trainer:
                 "connector": self.cfg.optimizer.connector_learning_rate,
                 "vit": self.cfg.optimizer.vit_learning_rate,
                 "llm": self.cfg.optimizer.llm_learning_rate,
+                "prompt": self.cfg.optimizer.prompt_learning_rate,
             }
             weight_decay_dict = {
                 "connector": self.cfg.optimizer.connector_weight_decay,
                 "vit": self.cfg.optimizer.vit_weight_decay,
                 "llm": self.cfg.optimizer.llm_weight_decay,
+                "prompt": 0.0,
             }
             for group in self.optim.param_groups:
                 group_name = group["group_name"]
@@ -821,6 +821,7 @@ class Trainer:
                 image_input_idx=batch.get("image_input_idx"),
                 subsegment_ids=batch.get("subsegment_ids"),
                 position_ids=batch.get("position_ids"),
+                prompt_idx=batch.get("prompt_idx")
             ).logits
         if "labels" in batch:
             assert "loss_masks" in batch
@@ -855,6 +856,10 @@ class Trainer:
             compute_z_loss=compute_z_loss, z_loss_scale=self.cfg.softmax_auxiliary_loss_scale,
             logit_idx = logit_idx, model=self.model
         )
+        tokenizer = self.model.config.get_tokenizer()
+        decoded_logits = tokenizer.decode(torch.argmax(logits, dim=-1).view(-1)[labels != -100])
+        decoded_labels = tokenizer.decode(labels[labels != -100])
+        print(f"kaidebug full logits vs labels:{decoded_logits}\n{decoded_labels}")
         bs = batch["input_ids"].shape[0]
         if loss_reduction == "none":
             # Reshape (batch_size * seq_len,) -> (batch_size, seq_len)
@@ -1022,6 +1027,7 @@ class Trainer:
                 "connector": self.cfg.optimizer.connector_learning_rate,
                 "vit": self.cfg.optimizer.vit_learning_rate,
                 "llm": self.cfg.optimizer.llm_learning_rate,
+                "prompt": self.cfg.optimizer.prompt_learning_rate,
             }
             for group in self.optim.param_groups:
                 group_name = group["group_name"]

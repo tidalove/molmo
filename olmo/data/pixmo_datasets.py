@@ -453,6 +453,7 @@ class PixMoPointsEval(Dataset):
             style="pointing",
             metadata=dict(
                 points=points,
+                point_scale=100,
                 masks=np.array(ex["masks"], dtype=bool),
                 image_url=ex["image_url"],
             )
