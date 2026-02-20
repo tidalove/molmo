@@ -61,8 +61,12 @@ def get_evaluator(name) -> EvaluatorConfig:
         return EvaluatorConfig(vqa_eval="real_world_qa_score")
     elif name == "clocks":
         return EvaluatorConfig(clock_eval=True)
-    elif name in ["pointing_eval", "panaf", "cfc"]:
+    elif name in ["pointing_eval", "panaf_point", "cfc"]:
         return EvaluatorConfig(pointing_eval=True)
+    elif name in ["panaf_count", "cfc_count", "panaf_filtered_count"]:
+        return EvaluatorConfig(count_eval=True)
+    elif name in ["panaf_qa"]:
+        return EvaluatorConfig(vqa_eval='mc')
     elif name == "clock_bench":
         return EvaluatorConfig(clock_bench_eval=True)
     elif name in ["countbench_qa"]:
@@ -114,7 +118,7 @@ def get_evaluation(name, seq_len, batch_size, max_examples, num_workers=2, save_
         max_new_tokens = 256
     elif name.startswith("user_questions_for_elo"):
         max_new_tokens = 768  # Can have counts of 20+ so make sure there is room
-    elif name in ["pointing_eval", "pointing", "panaf", "cfc"]:
+    elif name in ["pointing_eval", "pointing", "panaf_point", "cfc"]:
         max_new_tokens = 192  # 192 is enought for counts <=10 in the point tag format
     elif "countbench_qa" in name or "fast_flickr_count_qa" in name:
         max_new_tokens = 192

@@ -419,6 +419,7 @@ class PointingEval(Evaluator):
 
     def __init__(self, n_to_log=None):
         self.n_to_log = n_to_log
+        print("kaidebug PointingEval initiated")
 
     def __call__(self, metadatas, predictions, tokenizer, step=None):
         new_tokens = predictions["predictions"]
@@ -783,10 +784,11 @@ WORD_TO_NUM = {
 }
 
 
-class CountEval:
+class CountEval(Evaluator):
 
     def __init__(self, n_to_log=None):
         self.n_to_log = n_to_log
+        print("kaidebug CountEval initiated")
 
     def __call__(self, metadata, predictions, tokenizer, step=None):
         new_tokens = predictions["predictions"]
@@ -794,12 +796,12 @@ class CountEval:
         all_scores = defaultdict(list)
         points = []
         for ex_ix, pred_seq in enumerate(new_tokens):
-            metadata = metadata[ex_ix]
+            ex_metadata = metadata[ex_ix]
             pred = tokenizer.decode(pred_seq[pred_seq >= 0]).strip()
             pred = pred.split()[0].rstrip(".,")
-            gt = metadata["count"]
-            if "image_size" in metadata:
-                w, h = metadata["image_size"]
+            gt = ex_metadata["count"]
+            if "image_size" in ex_metadata:
+                w, h = ex_metadata["image_size"]
                 points.append(extract_points(pred, w, h))
 
             pred_int = None
@@ -807,7 +809,6 @@ class CountEval:
                 pred_int = int(pred)
             except ValueError:
                 pass
-            pred_int = 1
 
             if pred_int is None:
                 pred = pred.lower()

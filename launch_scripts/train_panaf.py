@@ -24,39 +24,6 @@ from scripts.train import main as train
 
 log = logging.getLogger("train")
 
-
-AUX = [
-    # Supervised datasets we want eval on
-    "coco_2014_vqa_multi",
-    "text_vqa",
-    "okvqa",
-    "chart_qa_weighted",
-    "doc_qa",
-    "info_qa",
-    "ai2_diagram_v2_mix_transparent",
-    "a_okvqa_mc",
-    "a_okvqa_da",
-    "android_control",
-
-    # Some other datasets we might want to eval on
-    "science_qa_img",
-    "tabwmp_da",
-    "st_qa",
-    "tally_qa",
-
-    # ("clocks", 250000),  # Downsample since it is huge
-    "pixmo_docs_charts",
-    "pixmo_docs_tables",
-    "pixmo_docs_other",
-    "pixmo_docs_diagrams",
-
-    # # Other synthetic data, also downsampled since they are huge
-    ("dv_qa", 10000),
-    ("figure_qa", 10000),
-    ("plot_qa", 20000),
-]
-
-
 def get_training_mixture(submixture):
     resolved_weights = {}
     for task_name in submixture:
@@ -87,29 +54,42 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(prog="Train a multitask model")
     parser.add_argument("checkpoint", help="Path to checkpoint to start from")
+    parser.add_argument("mixture", help="Name of training mixture")
     parser.add_argument("--seq_len", default=2304, type=int)
     parser.add_argument("--inf_seq_len", default=1792, type=int)
-    parser.add_argument("--max_inf_examples", default=2048, type=int)
+    parser.add_argument("--max_inf_examples", default=256, type=int)
     parser.add_argument("--global_batch_size", default=256, type=int)
-    parser.add_argument("--device_eval_batch_size", default=8, type=int)
-    parser.add_argument("--device_inf_batch_size", default=8, type=int)
-    parser.add_argument("--device_train_batch_size", default=8, type=int)
+    parser.add_argument("--device_eval_batch_size", default=4, type=int)
+    parser.add_argument("--device_inf_batch_size", default=4, type=int)
+    parser.add_argument("--device_train_batch_size", default=4, type=int)
     parser.add_argument("--ft_connector", action="store_true")
     parser.add_argument("--ft_llm", action="store_true")
     parser.add_argument("--ft_vit", action="store_true")
     parser.add_argument("--ft_embedding", default="none", type=str)
-    parser.add_argument("--duration", type=int, default=1000)
+    parser.add_argument("--duration", type=int, default=2000)
     parser.add_argument("--log_interval", type=int, default=20)
     parser.add_argument("--prompt_tuning", type=int, default=0)
     args, other_args = parser.parse_known_args()
+
+    # pick training mixture
+    train_datasets = ['panaf_point', 'panaf_count', 'panaf_filtered_count', 'panaf_qa']
+    if args.mixture == "all":
+        training_mixture = {dataset_name: 0.25 for dataset_name in train_datasets}
+    elif args.mixture == "all_no_point":
+        training_mixture = {dataset_name: 0.33 for dataset_name in train_datasets if dataset_name != 'panaf_point'}
+    elif args.mixture in train_datasets:
+        training_mixture = {args.mixture: 1.0}
+    else:
+        log.info(f'Training mixture {args.mixture} not recognized')
+        assert False # lol??
 
     eval_examples = 2048
     max_inf_examples = args.max_inf_examples
     log_interval = args.log_interval
     global_batch_size = args.global_batch_size
     duration = args.duration
-    inf_eval_interval = duration
-    eval_interval = duration
+    inf_eval_interval = duration 
+    eval_interval = duration 
     model_init = args.checkpoint
     if exists(join(args.checkpoint, "model.yaml")):
         model_cfg = ModelConfig.load(join(args.checkpoint, "model.yaml"))
@@ -130,19 +110,21 @@ if __name__ == "__main__":
     model_cfg.prompt_tuning_num = args.prompt_tuning
 
     evaluations = []
-    evaluation = get_evaluation(
-        "panaf",
-        args.inf_seq_len,
-        batch_size=get_world_size()*args.device_inf_batch_size,
-        max_examples=max_inf_examples,
-        num_workers=2,
-        save_to_ckpt=True
-    )
-    evaluation.data.persistent_workers = True
-    evaluations.append(evaluation)
+    eval_tasks = train_datasets
+    for task in eval_tasks:
+        evaluation = get_evaluation(
+            task,
+            args.inf_seq_len,
+            batch_size=get_world_size()*args.device_inf_batch_size,
+            max_examples=max_inf_examples,
+            num_workers=2,
+            save_to_ckpt=True
+        )
+        evaluation.data.persistent_workers = True
+        evaluations.append(evaluation)
 
     cfg = TrainConfig(
-        run_name="panaf_train_pointing",
+        run_name=f"panaf_train_{args.mixture}",
         no_pre_train_checkpoint=True,
         save_folder=omegaconf.MISSING,
         seed=6198,
@@ -159,7 +141,7 @@ if __name__ == "__main__":
         save_overwrite=False,
         save_dataloader_state=False,
         data=DataConfig(
-            dataset="panaf",
+            mixture=training_mixture,
             for_inference=False,
             shuffle=True,
             split="train",
@@ -206,7 +188,7 @@ if __name__ == "__main__":
         ),
         load_path=None,
         initial_model_checkpoint=None if "debug" in args.checkpoint else args.checkpoint,
-        save_interval=333,
+        save_interval=500,
         save_interval_unsharded=duration,
         save_num_checkpoints_to_keep=1,
         global_train_batch_size=global_batch_size,
@@ -223,6 +205,7 @@ if __name__ == "__main__":
         speed_monitor=SpeedMonitorConfig(window_size=20),
         softmax_auxiliary_loss=True,
         softmax_auxiliary_loss_scale=1e-4,
+        counting_loss=False,
         activation_checkpointing=ActivationCheckpointingStrategy.whole_layer,
         eval_interval=eval_interval,
         inf_eval_interval=inf_eval_interval,

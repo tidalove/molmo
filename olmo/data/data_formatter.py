@@ -550,7 +550,8 @@ class DataFormatter:
                         else:
                             prompt = example["label_cased"]
                         prompt = apply_keyword_prompt(GENERAL_PROMPTS_V1[style], dict(example, label=prompt), rng, dbg=self.debug)
-                        prompt = prepend_prompt(NO_POINT_PREFIX, prompt, rng)
+                        if style in ["only_count"]:
+                            prompt = prepend_prompt(NO_POINT_PREFIX, prompt, rng)
                     output = self.format_points(example)
                 elif "prompt" in example:
                     prompt = example["prompt"]

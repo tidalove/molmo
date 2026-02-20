@@ -856,10 +856,10 @@ class Trainer:
             compute_z_loss=compute_z_loss, z_loss_scale=self.cfg.softmax_auxiliary_loss_scale,
             logit_idx = logit_idx, model=self.model
         )
-        tokenizer = self.model.config.get_tokenizer()
-        decoded_logits = tokenizer.decode(torch.argmax(logits, dim=-1).view(-1)[labels != -100])
-        decoded_labels = tokenizer.decode(labels[labels != -100])
-        print(f"kaidebug full logits vs labels:{decoded_logits}\n{decoded_labels}")
+        # tokenizer = self.model.config.get_tokenizer()
+        # decoded_logits = tokenizer.decode(torch.argmax(logits, dim=-1).view(-1)[labels != -100])
+        # decoded_labels = tokenizer.decode(labels[labels != -100])
+        # print(f"kaidebug full logits vs labels:{decoded_logits}\n{decoded_labels}")
         bs = batch["input_ids"].shape[0]
         if loss_reduction == "none":
             # Reshape (batch_size * seq_len,) -> (batch_size, seq_len)

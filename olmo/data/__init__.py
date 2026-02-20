@@ -16,7 +16,7 @@ from olmo.data.pixmo_datasets import PixMoPointExplanations as PixMoPointExplana
     PixMoDocs, PixMoCount, PixMoPoints, PixMoCapQa, PixMoCap, PixMoPointExplanations, \
     PixMoAskModelAnything, PixMoPointsEval
 from olmo.data.coco_datasets import PanAfPointsEval, PanAfOnlyCount, PanAfFilteredCount, \
-      CFCPointsEval, CFCCount
+      CFCPointsEval, CFCCount, PanAfQA
 from olmo.torch_util import get_global_rank, get_world_size
 
 log = logging.getLogger(__name__)
@@ -265,11 +265,14 @@ def get_dataset_by_name(dataset_name, split):
     # Custom dataset
     if dataset_name == "cfc":
         return CFCPointsEval(split=split)
-    if dataset_name == "panaf":
+    if dataset_name == "panaf_point":
         return PanAfPointsEval(split=split)
-    if dataset_name == "panaf_count":
+    if dataset_name == "panaf_filtered_count":
         return PanAfFilteredCount(split=split)
-        # return PanAfOnlyCount(split=split) for debugging
+    if dataset_name == "panaf_count":
+        return PanAfOnlyCount(split=split)
+    if dataset_name == "panaf_qa":
+        return PanAfQA(split=split)
     if dataset_name == "cfc_count":
         return CFCCount(split=split)
 
